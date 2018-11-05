@@ -8,8 +8,8 @@
 #include <unistd.h>
 #include <limits.h>
 #include <stdbool.h>
+#include <getopt.h>
 #include <time.h>
-
 
 #ifdef __APPLE__
 #include <OpenAL/al.h>
@@ -21,25 +21,21 @@
 
 #include "buckle.h"
 
-#define SRC_INVALID INT_MAX
+#define MAX_SOURCES 32
 #define DEFAULT_MUTE_KEYCODE 0x46 /* Scroll Lock */
-
-#define TEST_ERROR(_msg)		\
-	error = alGetError();		\
-	if (error != AL_NO_ERROR) {	\
-		fprintf(stderr, _msg "\n");	\
-		exit(1);		\
-	}
+#define MAX_NUM_SAMPLES 3 /* Maximum number of samples per key */
 
 
 static void usage(char *exe);
 static void list_devices(void);
+static void test_openal_error(const char *msg);
 static double find_key_loc(int code);
 
 
-
 /* 
- * Horizontal position on keyboard for each key as they are located on my model-M
+ * Horizontal position on keyboard for each key as they are located on my
+ * model-M. I do not like this at all, this whould probably reworked to a
+ * proper table or read from a config file or so
  */
 
 static int keyloc[][32] = {
@@ -53,9 +49,12 @@ static int keyloc[][32] = {
 	{ 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x69, 0x6c, 0x6a, -1 },
 };
 
+
 /* 
- * Horizontal position on keyboard of the pragmatic center of the row, since keys come in different sizes and shapes
+ * Horizontal position on keyboard of the pragmatic center of the row, since
+ * keys come in different sizes and shapes
  */
+
 static double midloc[] = {
 	7.5,
 	7.5,
@@ -66,6 +65,15 @@ static double midloc[] = {
 	4.5,
 };
 
+static int muted = 0;
+static ALuint src[MAX_SOURCES] = { 0 };
+static ALuint buf[512 * MAX_NUM_SAMPLES] = { 0 };
+
+
+/*
+ * Cmdline options
+ */
+
 static int opt_verbose = 0;
 static int opt_stereo_width = 50;
 static int opt_gain = 100;
@@ -73,15 +81,32 @@ static int opt_fallback_sound = 0;
 static int opt_mute_keycode = DEFAULT_MUTE_KEYCODE;
 static const char *opt_device = NULL;
 static const char *opt_path_audio = PATH_AUDIO;
-static int muted = 0;
+
+static const char short_opts[] = "d:fg:hlm:Mp:s:v";
+
+static const struct option long_opts[] = {
+	{ "device",         required_argument, NULL, 'd' },
+	{ "fallback-sound", no_argument,       NULL, 'f' },
+	{ "gain",           required_argument, NULL, 'g' },
+	{ "help",           no_argument,       NULL, 'h' },
+	{ "list-devices",   no_argument,       NULL, 'l' },
+	{ "mute-keycode",   required_argument, NULL, 'm' },
+	{ "mute",           no_argument,       NULL, 'M' },
+	{ "audio-path",     required_argument, NULL, 'p' },
+	{ "stereo-width",   required_argument, NULL, 'w' },
+	{ "verbose",        no_argument,       NULL, 'v' },
+	{ 0, 0, 0, 0 }
+};
 
 
 int main(int argc, char **argv)
 {
 	int c;
 	int rv = EXIT_SUCCESS;
+	int idx;
 
-	while( (c = getopt(argc, argv, "Mfhm:vd:g:lp:s:")) != EOF) {
+	while( (c = getopt_long(argc, argv, 
+				   short_opts, long_opts, &idx)) != -1) {
 		switch(c) {
 			case 'd':
 				opt_device = optarg;
@@ -104,14 +129,14 @@ int main(int argc, char **argv)
 			case 'M':
 				muted = !muted;
 				break;
-			case 'v':
-				opt_verbose++;
-				break;
 			case 'p':
 				opt_path_audio = optarg;
 				break;
 			case 's':
 				opt_stereo_width = atoi(optarg);
+				break;
+			case 'v':
+				opt_verbose++;
 				break;
 			default:
 				usage(argv[0]);
@@ -124,12 +149,13 @@ int main(int argc, char **argv)
 		open_console();
 	}
 
+	srand(time(NULL));
+
 	/* Create openal context */
 
 	ALCdevice *device = NULL;
 	ALCcontext *context = NULL;
 	ALfloat listenerOri[] = { 0.0f, 0.0f, 1.0f, 0.0f, 1.0f, 0.0f };
-	ALCenum error;
 
 	if (!opt_device) {
 		opt_device = alcGetString(NULL, ALC_DEFAULT_DEVICE_SPECIFIER);
@@ -149,11 +175,16 @@ int main(int argc, char **argv)
 		fprintf(stderr, "failed to make default context\n");
 		return -1;
 	}
-	TEST_ERROR("make default context");
+	test_openal_error("make default context");
 
 	alListener3f(AL_POSITION, 0, 0, 0);
 	alListener3f(AL_VELOCITY, 0, 0, 0);
 	alListenerfv(AL_ORIENTATION, listenerOri);
+
+	/* Generate sample sources */
+
+	alGenSources(MAX_SOURCES, src);
+	test_openal_error("source generation");
 
 	/* Path to data files can also be specified by environment, this is
 	 * used by the snap package */
@@ -177,6 +208,16 @@ out:
 }
 
 
+static void test_openal_error(const char *msg)
+{
+	ALCenum error = alGetError();
+	if (error != AL_NO_ERROR) {
+		fprintf(stderr, "OpenAL error at %s\n", msg);
+		exit(1);
+	}
+}
+
+
 static void usage(char *exe)
 {
 	fprintf(stderr, 
@@ -185,19 +226,20 @@ static void usage(char *exe)
 		"\n"
 		"options:\n"
 		"\n"
-		"  -d DEVICE use OpenAL audio device DEVICE\n"
-		"  -f        use a fallback sound for unknown keys\n"
-		"  -g GAIN   set playback gain [0..100]\n"
-		"  -m CODE   use CODE as mute key (default 0x46 for scroll lock)\n"
-		"  -M        start the program muted\n"
-		"  -h        show help\n"
-		"  -l        list available openAL audio devices\n"
-		"  -p PATH   load .wav files from directory PATH\n"
-		"  -s WIDTH  set stereo width [0..100]\n"
-		"  -v        increase verbosity / debugging\n",
+		"  -d, --device=DEVICE       use OpenAL audio device DEVICE\n"
+		"  -f, --fallback-sound      use a fallback sound for unknown keys\n"
+		"  -g, --gain=GAIN           set playback gain [0..100]\n"
+		"  -m, --mute-keycode=CODE   use CODE as mute key (default 0x46 for scroll lock)\n"
+		"  -M, --mute                start the program muted\n"
+		"  -h, --help                show help\n"
+		"  -l, --list-devices        list available openAL audio devices\n"
+		"  -p, --audio-path=PATH     load .wav files from directory PATH\n"
+		"  -s, --stereo-width=WIDTH  set stereo width [0..100]\n"
+		"  -v, --verbose             increase verbosity / debugging\n",
 		exe
-       );
+	   );
 }
+
 
 static void list_devices(void)
 {
@@ -219,7 +261,7 @@ static void list_devices(void)
 void printd(const char *fmt, ...)
 {
 	if(opt_verbose) {
-		
+
 		char buf[256];
 		va_list va;
 
@@ -234,7 +276,7 @@ void printd(const char *fmt, ...)
 
 /*
  * Find horizontal position of the given key on the keyboard. returns -1.0 for
- * left to 1.0 for right 
+ * left to 1.0 for right
  */
 
 static double find_key_loc(int code)
@@ -291,67 +333,92 @@ static void handle_mute_key(int mute_key)
 
 int play(int code, int press)
 {
-	ALCenum error;
+	static int src_idx = 0;
 
-	printd("scancode %d/0x%x", code, code);
+	printd("key %d/0x%x %sed", code, code, press ? "press" : "release");
+
 
 	/* Check for mute sequence: ScrollLock down+up+down */
 
-	if (press) {
+	if(press) {
 		handle_mute_key(code == opt_mute_keycode);
 	}
 
-	static ALuint buf[512] = { 0 };
-	static ALuint src[512] = { 0 };
+	if(muted) {
+		return 0;
+	}
 
-	int idx = code + press * 256;
 
-	if(src[idx] == 0) {
+	/* 0 <= "code" <= 255, which means that 0 <= "idx" <= 511. We could
+	 * then add "$rand * 512" to jump to one of the possible samples for
+	 * this keycode. */
 
-		char fname[256];
-		snprintf(fname, sizeof(fname), "%s/%02x-%d.wav", opt_path_audio, code, press);
+	int buf_idx = code + press * 256;
+
+
+	/* Find a valid sample for this key. Assumes that a key either has
+	 * MAX_NUM_SAMPLES samples or just one sample. */
+
+	char fname[256];
+	int rand_off = rand() % MAX_NUM_SAMPLES;
+
+	snprintf(fname, sizeof fname, "%s/%02x-%d-%d.wav", opt_path_audio, code, press, rand_off);
+
+	if (access(fname, R_OK) != 0) {
+		printd("Sample #%d not found, falling back to #0");
+		rand_off = 0;
+		snprintf(fname, sizeof fname, "%s/%02x-%d-%d.wav", opt_path_audio, code, press, rand_off);
+	}
+
+
+	/* Load sample if not yet loaded */
+	
+	buf_idx += rand_off * 512;
+
+	if(buf[buf_idx] == 0) {
 
 		printd("Loading audio file \"%s\"", fname);
+		buf[buf_idx] = alureCreateBufferFromFile(fname);
 
-		buf[idx] = alureCreateBufferFromFile(fname);
-		if(buf[idx] == 0) {
+		if(buf[buf_idx] == 0) {
 
 			if(opt_fallback_sound) {
-				snprintf(fname, sizeof(fname), "%s/%02x-%d.wav", opt_path_audio, 0x31, press);
-				buf[idx] = alureCreateBufferFromFile(fname);
+				snprintf(fname, sizeof(fname), "%s/%02x-%d-0.wav", opt_path_audio, 0x31, press);
+				buf[buf_idx] = alureCreateBufferFromFile(fname);
 			} else {
 				fprintf(stderr, "Error opening audio file \"%s\": %s\n", fname, alureGetErrorString());
 			}
-
-			if(buf[idx] == 0) {
-				src[idx] = SRC_INVALID;
-				return -1;
-			}
 		}
-	
-		alGenSources((ALuint)1, &src[idx]);
-		TEST_ERROR("source generation");
-
-		double x = find_key_loc(code);
-		if (opt_stereo_width > 0) {
-			alSource3f(src[idx], AL_POSITION, -x, 0, (100 - opt_stereo_width) / 100.0);
-		}
-		alSourcef(src[idx], AL_GAIN, opt_gain / 100.0);
-
-		alSourcei(src[idx], AL_BUFFER, buf[idx]);
-		TEST_ERROR("buffer binding");
 	}
 
 
-	if(src[idx] != 0 && src[idx] != SRC_INVALID) {
-		if (!muted)
-			alSourcePlay(src[idx]);
-		TEST_ERROR("source playing");
+	/* Bind sample buffer to the next available source */
+
+	double x = find_key_loc(code);
+	if (opt_stereo_width > 0) {
+		alSource3f(src[src_idx], AL_POSITION, -x, 0, (100 - opt_stereo_width) / 100.0);
 	}
+	alSourcef(src[src_idx], AL_GAIN, opt_gain / 100.0);
+
+
+	/* Stop playing and bind a new buffer to the source */
+
+	alSourceStop(src[src_idx]);
+	test_openal_error("stop");
+
+	alSourcei(src[src_idx], AL_BUFFER, buf[buf_idx]);
+	test_openal_error("buffer binding");
+
+	alSourcePlay(src[src_idx]);
+	test_openal_error("play");
+
+
+	/* Round robin to the next source */
+
+	src_idx = (src_idx + 1) % MAX_SOURCES;
 
 	return 0;
 }
-
 
 
 /*
