@@ -30,7 +30,7 @@ int scan(int verbose)
 	}
 
 	rr->device_events.first = KeyPress;
-	rr->device_events.last = KeyRelease;
+	rr->device_events.last = ButtonReleaseMask;
 	rcs = XRecordAllClients;
 
 	rc = XRecordCreateContext (dpy, 0, &rcs, 1, &rr, 1);
@@ -75,6 +75,14 @@ void key_pressed_cb(XPointer arg, XRecordInterceptData *d)
 				break;
 			case KeyRelease:
 				play(key, 0);
+				break;
+			case ButtonPress:
+				if(key == -5 || key == -7)
+					play(0xff, 1);
+				break;
+			case ButtonRelease:
+				if(key == -5 || key == -7)
+					play(0xff, 0);
 				break;
 			default:
 				break;
