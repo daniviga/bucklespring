@@ -1,5 +1,7 @@
+%global debug_package %{nil}
+
 Name:           bucklespring
-Version:        1.4.99
+Version:        1.5.99
 Release:        1%{?dist}
 Summary:        Nostalgia bucklespring keyboard sound
 
@@ -45,5 +47,8 @@ cp -R wav/* %{buildroot}%{_datadir}/bucklespring
 
 
 %changelog
-* Mon Nov 5 2018 Daniele Viganò <daniele@vigano.me> - 1.4.99 
+* Fri May 14 2021 Daniele Viganò <daniele@vigano.me> - 1.5.99
+- Release 1.5.0
+
+* Mon Nov 5 2018 Daniele Viganò <daniele@vigano.me> - 1.4.99
 - First release
