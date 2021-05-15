@@ -14,6 +14,7 @@ BuildRequires:  gcc
 BuildRequires:  openal-soft-devel
 BuildRequires:  alure-devel
 BuildRequires:  libXtst-devel
+BuildRequires:  desktop-file-utils
 
 %description
 Fork of https://github.com/zevv/bucklespring
@@ -38,13 +39,29 @@ install -m 755 -d %{buildroot}%{_bindir}
 install -m 755 buckle %{buildroot}%{_bindir}/buckle
 install -m 755 -d wav %{buildroot}%{_datadir}/bucklespring
 cp -R wav/* %{buildroot}%{_datadir}/bucklespring
+desktop-file-install                                    \
+--dir=%{buildroot}%{_datadir}/applications              \
+buckle.desktop
 
+%post
+update-desktop-database &> /dev/null || :
+touch --no-create %{_datadir}/icons/hicolor &>/dev/null || :
+
+%postun
+update-desktop-database &> /dev/null || :
+if [ $1 -eq 0 ] ; then
+    touch --no-create %{_datadir}/icons/hicolor &>/dev/null
+    gtk-update-icon-cache %{_datadir}/icons/hicolor &>/dev/null || :
+fi
+
+%posttrans
+gtk-update-icon-cache %{_datadir}/icons/hicolor &>/dev/null || :
 
 %files
 %license LICENSE
 %{_bindir}/buckle
 %{_datadir}/bucklespring
-
+%{_datadir}/applications/buckle.desktop
 
 %changelog
 * Fri May 14 2021 Daniele Viganò <daniele@vigano.me> - 1.5.99
